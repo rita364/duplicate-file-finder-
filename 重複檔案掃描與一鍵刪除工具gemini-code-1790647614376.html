@@ -1,0 +1,378 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI 本機重複檔案清理小工具（含一鍵刪除）</title>
+    <style>
+        :root {
+            --primary: #4F46E5;
+            --danger: #EF4444;
+            --bg: #F9FAFB;
+            --card: #FFFFFF;
+            --text: #1F2937;
+            --border: #E5E7EB;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+            background-color: var(--bg);
+            color: var(--text);
+            max-width: 900px;
+            margin: 40px auto;
+            padding: 0 20px;
+        }
+
+        .container {
+            background: var(--card);
+            border-radius: 12px;
+            padding: 24px;
+            box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
+
+        h1 { margin-top: 0; color: #111827; }
+        p.subtitle { color: #6B7280; font-size: 0.95rem; margin-bottom: 20px; }
+
+        .drop-zone {
+            border: 2px dashed var(--primary);
+            border-radius: 8px;
+            padding: 40px;
+            text-align: center;
+            background-color: #EEF2FF;
+            cursor: pointer;
+            transition: background-color 0.2s;
+        }
+
+        .drop-zone:hover { background-color: #E0E7FF; }
+
+        .controls {
+            display: flex;
+            gap: 12px;
+            margin-top: 16px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        select, button {
+            padding: 8px 16px;
+            border-radius: 6px;
+            border: 1px solid var(--border);
+            font-size: 0.9rem;
+        }
+
+        button.btn-primary { background-color: var(--primary); color: white; border: none; cursor: pointer; font-weight: 600; }
+        button.btn-danger { background-color: var(--danger); color: white; border: none; cursor: pointer; font-weight: 600; }
+        button:hover { opacity: 0.9; }
+        button:disabled { background-color: #9CA3AF; cursor: not-allowed; }
+
+        .progress-bar {
+            width: 100%;
+            height: 8px;
+            background-color: var(--border);
+            border-radius: 4px;
+            margin-top: 16px;
+            overflow: hidden;
+            display: none;
+        }
+
+        .progress {
+            width: 0%;
+            height: 100%;
+            background-color: var(--primary);
+            transition: width 0.1s;
+        }
+
+        .action-bar {
+            margin-top: 20px;
+            padding: 16px;
+            background: #FEF3C7;
+            border-radius: 8px;
+            display: none;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .result-group {
+            margin-top: 20px;
+            border: 1px solid var(--border);
+            border-radius: 8px;
+            overflow: hidden;
+        }
+
+        .group-header {
+            background: #F3F4F6;
+            padding: 10px 16px;
+            font-weight: bold;
+            font-size: 0.9rem;
+            display: flex;
+            justify-content: space-between;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 16px;
+            border-top: 1px solid var(--border);
+            font-size: 0.85rem;
+        }
+
+        .file-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .tag {
+            padding: 2px 8px;
+            border-radius: 4px;
+            font-size: 0.75rem;
+            font-weight: 600;
+        }
+        .tag-img { background: #E0F2FE; color: #0369A1; }
+        .tag-pdf { background: #FEE2E2; color: #B91C1C; }
+        .tag-excel { background: #DCFCE7; color: #15803D; }
+        .tag-other { background: #F3F4F6; color: #374151; }
+        .tag-original { background: #D1FAE5; color: #065F46; }
+        .tag-duplicate { background: #FEE2E2; color: #991B1B; }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h1>📁 重複檔案掃描與一鍵刪除工具</h1>
+    <p class="subtitle">點擊下方按鈕選擇資料夾授權，系統將比對內容並提供直接刪除重複檔案的功能。</p>
+
+    <div class="drop-zone" id="selectDirBtn">
+        📂 點擊這裡選擇並授權掃描資料夾
+    </div>
+
+    <div class="controls">
+        <label>篩選檔案類型：</label>
+        <select id="fileFilter">
+            <option value="all">所有檔案</option>
+            <option value="images">僅照片 (JPG, PNG, GIF, WEBP)</option>
+            <option value="pdf">僅 PDF 檔案 (.pdf)</option>
+            <option value="excel">僅 Excel 檔案 (.xlsx, .xls, .csv)</option>
+        </select>
+    </div>
+
+    <div class="progress-bar" id="progressBar"><div class="progress" id="progress"></div></div>
+
+    <div class="action-bar" id="actionBar">
+        <div id="summaryText"></div>
+        <button class="btn-danger" id="deleteBtn" onclick="deleteSelectedFiles()">🗑️ 一鍵刪除勾選的副本</button>
+    </div>
+
+    <div id="results"></div>
+</div>
+
+<script>
+    const selectDirBtn = document.getElementById('selectDirBtn');
+    const fileFilter = document.getElementById('fileFilter');
+    const progressBar = document.getElementById('progressBar');
+    const progress = document.getElementById('progress');
+    const actionBar = document.getElementById('actionBar');
+    const summaryText = document.getElementById('summaryText');
+    const results = document.getElementById('results');
+
+    let rootDirectoryHandle = null;
+    let fileEntries = []; // 存放所有掃描到的檔案與其 Handle
+
+    const extMap = {
+        images: ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp'],
+        pdf: ['pdf'],
+        excel: ['xlsx', 'xls', 'csv']
+    };
+
+    selectDirBtn.addEventListener('click', async () => {
+        try {
+            // 要求使用者授權存取資料夾（支援寫入/刪除權限）
+            rootDirectoryHandle = await window.showDirectoryPicker({ mode: 'readwrite' });
+            scanDirectory();
+        } catch (err) {
+            if (err.name !== 'AbortError') {
+                alert('您的瀏覽器不支援 FileSystem API，或未授予檔案存取權限。請使用 Chrome 或 Edge 瀏覽器。');
+            }
+        }
+    });
+
+    async function scanDirectory() {
+        if (!rootDirectoryHandle) return;
+
+        // 初始化狀態
+        fileEntries = [];
+        progressBar.style.display = 'block';
+        progress.style.width = '0%';
+        results.innerHTML = '';
+        actionBar.style.display = 'none';
+
+        // 遞迴讀取資料夾內的所有檔案
+        await readDirectoryRecursive(rootDirectoryHandle, '');
+
+        const selectedFilter = fileFilter.value;
+        const filteredEntries = fileEntries.filter(entry => {
+            const ext = entry.file.name.split('.').pop().toLowerCase();
+            if (selectedFilter === 'all') return true;
+            return extMap[selectedFilter].includes(ext);
+        });
+
+        if (filteredEntries.length === 0) {
+            alert('資料夾內沒有符合篩選條件的檔案！');
+            progressBar.style.display = 'none';
+            return;
+        }
+
+        const hashMap = new Map();
+        let processedCount = 0;
+
+        for (const entry of filteredEntries) {
+            const hash = await calculateHash(entry.file);
+            if (!hashMap.has(hash)) {
+                hashMap.set(hash, []);
+            }
+            hashMap.get(hash).push(entry);
+
+            processedCount++;
+            progress.style.width = `${(processedCount / filteredEntries.length) * 100}%`;
+        }
+
+        setTimeout(() => progressBar.style.display = 'none', 300);
+        renderResults(hashMap);
+    }
+
+    // 遞迴取得所有檔案及其 Handle
+    async function readDirectoryRecursive(directoryHandle, path) {
+        for await (const entry of directoryHandle.values()) {
+            const currentPath = path ? `${path}/${entry.name}` : entry.name;
+            if (entry.kind === 'file') {
+                const file = await entry.getFile();
+                fileEntries.push({
+                    file: file,
+                    handle: entry,
+                    parentHandle: directoryHandle,
+                    path: currentPath
+                });
+            } else if (entry.kind === 'directory') {
+                await readDirectoryRecursive(entry, currentPath);
+            }
+        }
+    }
+
+    async function calculateHash(file) {
+        const buffer = await file.arrayBuffer();
+        const hashBuffer = await crypto.subtle.digest('SHA-256', buffer);
+        const hashArray = Array.from(new Uint8Array(hashBuffer));
+        return hashArray.map(b => b.toString(16).padStart(2, '0')).join('');
+    }
+
+    function getFileTypeCategory(ext) {
+        ext = ext.toLowerCase();
+        if (extMap.images.includes(ext)) return { name: '照片', class: 'tag-img' };
+        if (extMap.pdf.includes(ext)) return { name: 'PDF', class: 'tag-pdf' };
+        if (extMap.excel.includes(ext)) return { name: 'Excel', class: 'tag-excel' };
+        return { name: '其他', class: 'tag-other' };
+    }
+
+    function renderResults(hashMap) {
+        let duplicateGroups = 0;
+        let totalWastedSize = 0;
+        let duplicateCount = 0;
+        results.innerHTML = '';
+
+        hashMap.forEach((entries) => {
+            if (entries.length > 1) {
+                duplicateGroups++;
+                const fileSize = entries[0].file.size;
+                const wasted = fileSize * (entries.length - 1);
+                totalWastedSize += wasted;
+                duplicateCount += (entries.length - 1);
+
+                const ext = entries[0].file.name.split('.').pop();
+                const category = getFileTypeCategory(ext);
+
+                const groupDiv = document.createElement('div');
+                groupDiv.className = 'result-group';
+
+                let groupHTML = `
+                    <div class="group-header">
+                        <span><span class="tag ${category.class}">${category.name}</span> 發現重複組 (${entries.length} 個檔案)</span>
+                        <span>單檔大小: ${formatBytes(fileSize)} | 可釋放: ${formatBytes(wasted)}</span>
+                    </div>
+                `;
+
+                entries.forEach((entry, idx) => {
+                    const isOriginal = idx === 0; // 第一個預設保留為原檔
+                    groupHTML += `
+                        <div class="file-item">
+                            <div class="file-info">
+                                ${isOriginal 
+                                    ? '<span class="tag tag-original">保留原檔</span>' 
+                                    : `<input type="checkbox" class="delete-checkbox" checked data-path="${entry.path}">
+                                       <span class="tag tag-duplicate">副本</span>`
+                                }
+                                <strong>${entry.file.name}</strong>
+                            </div>
+                            <span style="color:#6B7280; font-size:0.8rem;">${entry.path}</span>
+                        </div>
+                    `;
+                });
+
+                groupDiv.innerHTML = groupHTML;
+                results.appendChild(groupDiv);
+            }
+        });
+
+        if (duplicateGroups > 0) {
+            actionBar.style.display = 'flex';
+            summaryText.innerHTML = `共發現 <strong>${duplicateGroups}</strong> 組重複，預計可刪除 <strong>${duplicateCount}</strong> 個副本檔案，釋放 <strong>${formatBytes(totalWastedSize)}</strong> 空間。`;
+        } else {
+            actionBar.style.display = 'none';
+            results.innerHTML = '<div style="text-align:center; padding:40px; color:#10B981; font-weight:bold;">✅ 太棒了！沒有發現任何重複的檔案。</div>';
+        }
+    }
+
+    async function deleteSelectedFiles() {
+        const checkboxes = document.querySelectorAll('.delete-checkbox:checked');
+        if (checkboxes.length === 0) {
+            alert('請至少勾選一個要刪除的檔案！');
+            return;
+        }
+
+        if (!confirm(`⚠️ 確定要從硬碟中「永久刪除」這 ${checkboxes.length} 個重複檔案嗎？此動作無法復原！`)) {
+            return;
+        }
+
+        let deletedCount = 0;
+
+        for (const cb of checkboxes) {
+            const pathToDelete = cb.getAttribute('data-path');
+            const entryToDelete = fileEntries.find(e => e.path === pathToDelete);
+
+            if (entryToDelete) {
+                try {
+                    // 呼叫 API 直接從實體硬碟刪除檔案
+                    await entryToDelete.parentHandle.removeEntry(entryToDelete.handle.name);
+                    deletedCount++;
+                } catch (err) {
+                    console.error(`刪除失敗: ${pathToDelete}`, err);
+                }
+            }
+        }
+
+        alert(`🎉 成功刪除 ${deletedCount} 個重複檔案！`);
+        // 刪除完成後重新掃描更新列表
+        scanDirectory();
+    }
+
+    function formatBytes(bytes) {
+        if (bytes === 0) return '0 Bytes';
+        const k = 1024;
+        const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+        const i = Math.floor(Math.log(bytes) / Math.log(k));
+        return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+    }
+</script>
+
+</body>
+</html>
